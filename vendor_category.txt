@@ -1,0 +1,282 @@
+rm(list=ls())
+load.libraries <- c("dplyr","gdata", "gtools","openxlsx","stringr","tidyr","plyr","RPostgres","data.table","stringi","DescTools")
+install.lib <- load.libraries[!load.libraries %in% installed.packages()]
+for(libs in install.lib) install.packages(libs, dependences = TRUE)
+sapply(load.libraries, require, character = TRUE)
+
+pconn_r <- dbConnect(RPostgres::Postgres(),  
+                     host = "10.55.245.96",
+                     port = "5439",
+                     user = "admin",
+                     password = "Red-MIO-DEV1-Newpwd",
+                     dbname = "mio",
+                     sslmode='require')
+#### Data Preprocessing ##########
+LFA1 <- dbGetQuery(pconn_r, 'select client,account_number_of_vendor_or_creditor,
+                   country_key,name_1,city ,industry_key,vendor_account_group,
+                   date_on_which_the_record_was_created,
+                   system_name,system_id from spectrum_schema.vendor_master_lfa1')
+
+T005 <- dbGetQuery(pconn_r, 'select country_key,country_name,language_key from spectrum_schema.country_names')
+T005<- T005[T005$language_key=="E",] 
+T005<-T005 [!duplicated(T005[c("country_key")]),]
+LFA1_Fin<- join(LFA1,T005, by = "country_key", type = "left", match = "all")
+rm(list=ls()[! ls() %in% c("LFA1_Fin","T005")])
+LFA1_Fin$Accno <- ifelse(grepl("[[:alpha:]]", LFA1_Fin$account_number_of_vendor_or_creditor) & grepl("[[:digit:]]",LFA1_Fin$account_number_of_vendor_or_creditor),LFA1_Fin$account_number_of_vendor_or_creditor, str_remove(LFA1_Fin$account_number_of_vendor_or_creditor, "^0+"))
+
+
+#### Vendor Logic starts here ##########
+Countries  <- c("AR","BR","CL","CO","GT","MX","PA","PY","CR","EC","VE","UY","PE","HN","SV","NI","DO")
+APAC <- c("AU","CN","ID", "IN","JP","KR","MY","NZ", "PH", "SG", "TH","TW","VN","PK")
+LFA1_Fin$Region <- ifelse(LFA1_Fin$country_key %in% APAC, "APAC",
+                   ifelse(LFA1_Fin$country_key %in% Countries, "LATAM","NA"))
+Ds <- setDT(subset(LFA1_Fin, country_key %in% Countries))
+Df <- setDT(subset(LFA1_Fin, !(country_key %in% Countries)))
+rm(Countries,T005)
+
+######################Running Conditions Here############
+####################Argentina ################
+AR <- subset(Ds, country_key =="AR")
+AG_fun <- function(DF) {
+  transform(DF, Class_Vendor1 = ifelse(country_key=="AR" & (vendor_account_group =="Z001")| (substr(Accno,1,1)=="2" & nchar(Accno==8) & !substr(Accno,1,4)=="2008") | (substr(Accno,1,1)=="5"), "Third Party Vendor", 
+                                ifelse((country_key=="AR" & vendor_account_group =="EMPL" | ((substr(Accno,1,1)=="2" & nchar(Accno)==7)|(substr(Accno,1,1)=="3"|substr(Accno,1,1)=="4"))),"Employee", 
+                                ifelse((country_key=="AR" & (substr(Accno,1,4)=="2008" | grepl("[[:alpha:]]", Accno))),"IC Vendors",
+                                ifelse((country_key=="AR" & (system_name =="FNDG") & substr(Accno,1,1)=="6"),"Grower",
+                                NA_character_)))))
+}
+
+AR<-AG_fun(AR)
+AR$Class_Vendor1 <- as.character(AR$Class_Vendor1)
+AR$Class_Vendor<-ifelse(is.na(AR$Class_Vendor1),"BLANK",AR$Class_Vendor1)
+
+#################### Brazil ################
+BR <- subset(Ds, country_key =="BR")
+BR_fun <- function(DF) {
+  transform(DF, Class_Vendor1 = ifelse((country_key=="BR" & vendor_account_group =="EMPL" |substr(Accno,1,1)=="2"),"Employee",
+                                ifelse(country_key=="BR" & (substr(Accno,1,1)=="5"|substr(Accno,1,1)=="8"|substr(Accno,1,1)=="9"|substr(Accno,1,1)=="1"|substr(Accno,1,1)=="3"|substr(Accno,1,1)=="4"),"Third Party Vendor",
+                                ifelse((country_key=="BR" & (system_name =="FNDG")& substr(Accno,1,1)=="6"),"Grower",
+                                ifelse((country_key=="BR" & str_detect(substr(Accno,1,1),"(.*[[:alpha:]])")),"IC Vendors",NA_character_)))))
+}
+BR<-BR_fun(BR)
+BR$Class_Vendor<-ifelse(is.na(BR$Class_Vendor1) & (BR$country_key=="BR"),"BLANK",BR$Class_Vendor1)
+BR <- BR[which(BR$country_key=="BR")]
+
+#################### Chile ################
+CL <- subset(Ds, country_key =="CL")
+CH_fun <- function(DF) {
+  transform(DF, Class_Vendor1 = ifelse((country_key=="CL" & (substr(Accno,1,1)=="2") & nchar(Accno)==8 & (!substr(Accno,1,4)=="2008")),"Third Party Vendor", 
+                                ifelse((country_key=="CL" & vendor_account_group =="EMPL" |substr(Accno,1,1)=="3"),"Employee",
+                                ifelse((country_key=="CL" & substr(Accno,1,4)=="2008"),"IC Vendors",NA_character_))))
+}
+CL<-CH_fun(CL)
+CL$Class_Vendor1 <- as.character(CL$Class_Vendor1)
+CL$Class_Vendor<-ifelse(is.na(CL$Class_Vendor1),"BLANK",CL$Class_Vendor1)
+
+
+# Columbia #################################
+CO <- subset(Ds, country_key =="CO")
+CO_fun <- function(DF) {
+  transform(DF, Class_Vendor1 = ifelse((country_key=="CO" & (substr(Accno,1,4)=="2008"|grepl("[[:alpha:]]", Accno))),"IC Vendors",
+                                ifelse((country_key=="CO" & substr(Accno,1,1)=="5" |(substr(Accno,1,1)=="2"  & nchar(Accno)==8) & !(grepl("[[:alpha:]]", Accno) & grepl("[[:digit:]]",Accno))),"Third Party Vendor",
+                                ifelse((country_key=="CO" & vendor_account_group =="EMPL" | (substr(Accno,1,1)=="3") |(substr(Accno,1,1)=="2" & nchar(Accno==9))),"Employee",NA_character_))))
+}
+CO<-CO_fun(CO)
+CO$Class_Vendor1 <- as.character(CO$Class_Vendor1)
+CO$Class_Vendor<-ifelse(is.na(CO$Class_Vendor1),"BLANK",CO$Class_Vendor1)
+
+
+
+# Guatemala #################################
+GT <- subset(Ds, country_key =="GT")
+GT<- as.data.table(GT)
+GT[, Class_Vendor1 := ifelse((country_key=="GT" & (substr(Accno,1,4)=="2008"|grepl("[[:alpha:]]", Accno))),"IC Vendors",
+                      ifelse((country_key=="GT" & (substr(Accno,1,1)=="6" & !str_length(Accno)==9)),"Grower",
+                      ifelse((country_key=="GT" & vendor_account_group =="EMPL" |(substr(Accno,1,1)=="3" ) | (substr(Accno,1,1)=="2" & nchar(Accno)==7) | (substr(Accno,1,1)=="6" & nchar(Accno==9))),"Employee",
+                      ifelse((country_key=="GT" & (substr(Accno,1,1)=="5")|(substr(Accno,1,1)=="2" & nchar(Accno)==8 )),"Third Party Vendor",NA_character_))))]
+
+GT$Class_Vendor1 <- as.character(GT$Class_Vendor1)
+GT$Class_Vendor<-ifelse(is.na(GT$Class_Vendor1),"BLANK",GT$Class_Vendor1)
+
+# Mexico #################################
+MX <- subset(Ds, country_key =="MX")
+
+MX_fun <- function(DF) {
+  transform(DF, Class_Vendor1 = ifelse((country_key=="MX" & (substr(Accno,1,1)=="4" |substr(Accno,1,1)=="5"|substr(Accno,1,1)=="9")),"Third Party Vendor", 
+                                ifelse((country_key=="MX" & vendor_account_group =="EMPL" |(substr(Accno,1,1)=="1" )|(substr(Accno,1,1)=="0" & (grepl("[[:alpha:]]", Accno)) & grepl("[[:digit:]]",Accno))),"Employee",
+                                ifelse((country_key=="MX" & str_detect(substr(Accno,1,1),"(.*[[:alpha:]])")),"IC Vendors",NA_character_))))
+  #ifelse((country_key=="MX" & substr(Accno,1,1)==(grepl("[[:alpha:]]", Accno))),"IC Vendors",NA_character_))))
+}
+MX<-MX_fun(MX)
+MX$Class_Vendor1 <- as.character(MX$Class_Vendor1)
+MX$Class_Vendor<-ifelse(is.na(MX$Class_Vendor1),"BLANK",MX$Class_Vendor1)
+
+### Panama #################################
+PA <- subset(Ds, country_key =="PA")
+PA_fun <- function(DF) {
+  transform(DF, Class_Vendor1 = ifelse((country_key=="PA" & substr(Accno,1,4)=="2008"),"IC Vendors",
+                                ifelse((country_key=="PA" & (substr(Accno,1,1)=="2") & nchar(Accno==8)), "Third Party Vendor", 
+                                ifelse((country_key=="PA" & vendor_account_group =="EMPL" |substr(Accno,1,1)=="3"),"Employee",NA_character_))))
+}
+PA<-PA_fun(PA)
+PA$Class_Vendor1 <- as.character(PA$Class_Vendor1)
+PA$Class_Vendor<-ifelse(is.na(PA$Class_Vendor1),"BLANK",PA$Class_Vendor1)
+
+##################Paraguay####
+PY <- subset(Ds, country_key =="PY")
+PY[, Class_Vendor1 := ifelse((country_key=="PY" & substr(Accno,1,4)=="2008"),"IC Vendors", 
+                      ifelse((country_key=="PY" & vendor_account_group =="EMPL" |(substr(Accno,1,1)=="3")|((substr(Accno,1,1)=="4") &(grepl("[[:alpha:]]", Accno) & grepl("[[:digit:]]",Accno)))),"Employee",
+                      ifelse((country_key=="PY" & (substr(Accno,1,1)=="2") & nchar(Accno)==8 ),"Third Party Vendor" ,NA_character_ 
+                                    )))]
+
+PY$Class_Vendor1 <- as.character(PY$Class_Vendor1)
+PY$Class_Vendor<-ifelse(is.na(PY$Class_Vendor1),"BLANK",PY$Class_Vendor1)
+
+##################Costa Rica####
+CR <- subset(Ds, country_key =="CR")
+CR[, Class_Vendor1 := ifelse((country_key=="CR" & substr(Accno,1,4)=="2008"),"IC Vendors", 
+                      ifelse((country_key=="CR" & vendor_account_group =="EMPL"),"Employee", 
+                      ifelse((country_key=="CR" & (substr(Accno,1,1)=="2") & nchar(Accno)==8 ),"Third Party Vendor" ,NA_character_ 
+                          )))]
+
+CR$Class_Vendor1 <- as.character(CR$Class_Vendor1)
+CR$Class_Vendor<-ifelse(is.na(CR$Class_Vendor1),"BLANK",CR$Class_Vendor1)
+
+##################Ecuador ####
+EC <- subset(Ds, country_key =="EC")
+EC[, Class_Vendor1 := ifelse((country_key=="EC" & vendor_account_group =="EMPL" |substr(Accno,1,1)=="3"),"Employee", 
+                             ifelse((country_key=="EC" & (substr(Accno,1,1)=="2") & nchar(Accno)==8 ),"Third Party Vendor" ,NA_character_ 
+                             ))]
+
+EC$Class_Vendor1 <- as.character(EC$Class_Vendor1)
+EC$Class_Vendor<-ifelse(is.na(EC$Class_Vendor1),"BLANK",EC$Class_Vendor1)
+
+##################Uruguay ####
+UY <- subset(Ds, country_key =="UY")
+UY <- subset(Ds, country_key =="UY")
+UY<- as.data.table(UY)
+UY[, Class_Vendor1 := ifelse((country_key=="UY" & (substr(Accno,1,4)=="2008"|grepl("[[:alpha:]]", Accno))),"IC Vendors",
+                      ifelse((country_key=="UY" & (substr(Accno,1,1)=="6")),"Grower",
+                      ifelse((country_key=="UY" & vendor_account_group =="EMPL" |(substr(Accno,1,1)=="1" )),"Employee",
+                      ifelse((country_key=="UY" & (substr(Accno,1,1)=="5")|(substr(Accno,1,1)=="2" & nchar(Accno)==8 )),"Third Party Vendor",NA_character_))))]
+
+UY$Class_Vendor1 <- as.character(UY$Class_Vendor1)
+UY$Class_Vendor<-ifelse(is.na(UY$Class_Vendor1),"BLANK",UY$Class_Vendor1)
+
+##################Venezuela ####
+VE<- subset(Ds, country_key =="VE")
+VE[, Class_Vendor1 := ifelse((country_key=="VE" & vendor_account_group =="EMPL" |substr(Accno,1,1)=="3"),"Employee", 
+                             ifelse((country_key=="VE" & (substr(Accno,1,1)=="2") & nchar(Accno)==8 ),"Third Party Vendor" ,NA_character_ 
+                             ))]
+
+VE$Class_Vendor1 <- as.character(VE$Class_Vendor1)
+VE$Class_Vendor<-ifelse(is.na(VE$Class_Vendor1),"BLANK",VE$Class_Vendor1)
+
+##################Others ####
+CC <- c("PE","HN","SV","NI","DO")
+OTH <- subset(Ds, country_key %in% CC)
+OTH[, Class_Vendor1 := ifelse((country_key%in% CC & vendor_account_group =="EMPL" |substr(Accno,1,1)=="3"),"Employee", 
+                              ifelse((country_key%in% CC & (substr(Accno,1,1)=="2") & nchar(Accno)==8 ),"Third Party Vendor" ,NA_character_ 
+                              ))]
+
+OTH$Class_Vendor1 <- as.character(OTH$Class_Vendor1)
+OTH$Class_Vendor<-ifelse(is.na(OTH$Class_Vendor1),"BLANK",OTH$Class_Vendor1)
+LAT <-rbind(AR,BR,CL,CO,GT,MX,PA,PY,CR,EC,UY,VE,OTH)
+rm(list=ls()[! ls() %in% c("LFA1_Fin","Df", "LAT")])
+
+########Final Merging ##########
+LF <- read.csv("D:/Users/s985051/Desktop/Latam_Vendors.csv")
+LF$Key <- paste(LF$country_key, LF$Accno, sep = "_")
+LF<- LF[!duplicated(LF$Key),]
+
+keeps <- c("Key", "Category")
+LF<- LF[keeps]
+LAT$Key <- paste(LAT$country_key, LAT$Accno, sep = "_")
+final <- merge(LAT,LF,by="Key", all.x = TRUE)
+
+final$Category <- as.character(final$Category)
+final$Category<-ifelse(is.na(final$Category),final$Class_Vendor,final$Category)
+final <- subset(final, select = -c(Key,Class_Vendor1 ,Class_Vendor))
+rm(LAT,LF,keeps)
+
+proper <- function(x)
+  paste0(toupper(substr(x, 1, 1)), tolower(substring(x, 2)))
+final$Category <-proper(StrTrim(final$Category, pattern = " \t\n", method = "both"))
+final$name_1 <-proper(StrTrim(final$name_1, pattern = " \t\n", method = "both"))
+final$Category <- ifelse(grepl("*Syngenta*", final$name_1), "Ic vendors", final$Category)
+#Blanks <-final[final$Category == 'Blank',]
+
+##############################Latam Complete Code #######################
+###### GSAP ########
+
+DfG <- subset(Df, system_name =="GSAP")
+APAC <- c("AU","CN","ID", "IN","JP","KR","MY","NZ", "PH", "SG", "TH","TW","VN","PK")
+TP <- c("KRED", "SPZK", "NFTY", "KOSK")
+
+DfG[, Class_Vendor1 := ifelse((system_name == "GSAP" & vendor_account_group == "EMPL"| substr(Accno,1,1)=="1"| (substr(Accno,1,1)=="2") & !str_length(Accno)==6),"Employee",
+                       ifelse((system_name == "GSAP" & substr(Accno,1,1)=="4"|(vendor_account_group  %in% TP & Region %in% APAC)),"Third party vendor",
+                       ifelse((system_name == "GSAP" & vendor_account_group =="LWRK" |substr(Accno,1,1)=="7"),"Plant vendor for Stock transfer",
+                       ifelse((system_name == "GSAP" & (substr(Accno,1,1)=="2") & nchar(Accno)==6),"Ic vendors",
+                       NA_character_ ))))]
+DfG$Class_Vendor1 <- as.character(DfG$Class_Vendor1)
+DfG$Category<-ifelse(is.na(DfG$Class_Vendor1),"Blank",DfG$Class_Vendor1)
+DfG <- subset(DfG, select = -c(Class_Vendor1))
+DfG$Category <- ifelse(grepl("*Syngenta*", DfG$name_1), "Ic vendors", DfG$Category)
+DfG$Category <- ifelse(DfG$vendor_account_group  %in% TP, "Third party vendor", DfG$Category)
+Latam_Apac<-rbind(DfG,final)
+
+###### FNDG ########
+DfF <- subset(Df, system_name =="FNDG")
+DfF[, Class_Vendor1 := ifelse((system_name == "FNDG" & substr(Accno,1,1)=="5"),"Third Party Vendor",
+                       ifelse((system_name == "FNDG" & substr(Accno,1,1)=="6"),"Grower",
+                       ifelse((system_name == "FNDG" & grepl("[[:alpha:]]", Accno)),"IC Vendors",
+                       ifelse((system_name == "FNDG" & substr(Accno,1,1)=="1"| (substr(Accno,1,1)=="2")),"Employee",NA_character_ 
+                                            ))))]
+DfF$Class_Vendor1 <- as.character(DfF$Class_Vendor1)
+DfF$Category<-ifelse(is.na(DfF$Class_Vendor1),"Blank",DfF$Class_Vendor1)
+DfF <- subset(DfF, select = -c(Class_Vendor1))
+La_ApFn<-rbind(DfF,Latam_Apac)
+rm(DfG,final,TP,proper,APAC)
+rm(Latam_Apac,DfF)
+
+##### NSAP #######
+DfN <- subset(Df, system_name =="NSAP")
+NSAP <- read.csv("D:/Users/s985051/Desktop/NSAP.csv")
+DfN1 <- merge(DfN,NSAP, by="Accno", all.x = TRUE)
+DfN1$Category <- as.character(DfN1$Category)
+rm(NSAP,DfN)
+DfN <- subset(DfN1, select = -c(system_name.y))
+DfN$date_on_which_the_record_was_created <- as.character(DfN$date_on_which_the_record_was_created)
+colnames(DfN)[colnames(DfN)=="system_name.x"] <- "system_name"
+DfN$Category <- ifelse(DfN$vendor_account_group == "EMPL" , "Employee", DfN$Category)
+fi<-DfN %>% select(order(colnames(.)))
+LAT<- La_ApFn %>% select(order(colnames(.)))
+LAT$date_on_which_the_record_was_created <-as.character(LAT$date_on_which_the_record_was_created)
+Vendors <- rbind(LAT,fi)
+Vendors$Category <- ifelse(is.na(Vendors$Category),"Blank",Vendors$Category)
+#write.csv(Vendors,"Dwaip.csv")
+
+rm(DfN,La_ApFn,DfN1)
+##### Rest #######
+syn <- c("FNDG","GSAP","NSAP")
+Sy <- setDT(subset(Df, !(system_name %in% syn)))
+Sy$Category <- "Blank"
+Sy$date_on_which_the_record_was_created <-as.character(Sy$date_on_which_the_record_was_created)
+Rem<- Sy %>% select(order(colnames(.)))
+Df.Vendor <- rbind(Rem,Vendors)
+rm(list=ls()[! ls() %in% c("Df.Vendor","LFA1_Fin")])
+Df.Vendor$Category <- ifelse(grepl("*Syngenta*", Df.Vendor$name_1), "Ic vendors", Df.Vendor$Category)
+Df.Vendor$Category <- ifelse(grepl("*SYNGENTA*", Df.Vendor$name_1), "Ic vendors", Df.Vendor$Category)
+
+Df<- Df.Vendor[Df.Vendor$Category == 'Blank',]
+Df1<-Df.Vendor[!Df.Vendor$Category == 'Blank',]
+
+##### HQ #######
+HQ <- read.csv("D:/Users/s985051/Desktop/HQ.csv")
+HQ$name_1 <- NULL
+Dfs <- merge(Df,HQ, by="Accno", all.x = TRUE)
+Dfs$Vendor.Category <- as.character(Dfs$Vendor.Category)
+Dfs$Category <- ifelse(is.na(Dfs$Vendor.Category),"Blank",Dfs$Vendor.Category)
+Dfs <- subset(Dfs, select = -c(Systems,Vendor.Category))
+HQ<-Dfs %>% select(order(colnames(.)))
+Vendors <- rbind(HQ,Df1)
+rm(list=ls()[! ls() %in% c("LFA1_Fin","Vendors")])
