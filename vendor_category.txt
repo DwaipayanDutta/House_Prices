@@ -5,10 +5,10 @@ for(libs in install.lib) install.packages(libs, dependences = TRUE)
 sapply(load.libraries, require, character = TRUE)
 
 pconn_r <- dbConnect(RPostgres::Postgres(),  
-                     host = "10.55.245.96",
+                     host = "10.55.275.95",
                      port = "5439",
                      user = "admin",
-                     password = "Red-MIO-DEV1-Newpwd",
+                     password = "Red-Newpwd",
                      dbname = "mio",
                      sslmode='require')
 #### Data Preprocessing ##########
